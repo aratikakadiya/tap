@@ -76,6 +76,7 @@ import ca.nrc.cadc.tap.schema.ColumnDesc;
 import ca.nrc.cadc.tap.schema.TableDesc;
 import ca.nrc.cadc.tap.schema.TapSchemaUtil;
 import ca.nrc.cadc.tap.schema.Util;
+import java.util.List;
 import javax.sql.DataSource;
 import org.apache.log4j.Logger;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -282,32 +283,38 @@ public class TableCreator {
             throw new RuntimeException("failed to drop table " + tableName, ex);
         }
     }
-    
-    public void createIndex(ColumnDesc cd, boolean unique) {
-        try {
-            TapSchemaUtil.checkValidTableName(cd.getTableName());
-        } catch (ADQLIdentifierException ex) {
-            throw new IllegalArgumentException("invalid table name: " + cd.getTableName(), ex);
+
+    public void createIndex(List<ColumnDesc> columns, String indexType) {
+        if (columns == null || columns.isEmpty()) {
+            throw new IllegalArgumentException("columns list must not be empty");
         }
+        String tableName = columns.get(0).getTableName();
         try {
-            TapSchemaUtil.checkValidIdentifier(cd.getColumnName());
+            TapSchemaUtil.checkValidTableName(tableName);
         } catch (ADQLIdentifierException ex) {
-            throw new IllegalArgumentException("invalid column name: " + cd.getColumnName(), ex);
+            throw new IllegalArgumentException("invalid table name: " + tableName, ex);
         }
-        
-        String sql = generateCreateIndex(cd, unique);
-        
+        for (ColumnDesc cd : columns) {
+            try {
+                TapSchemaUtil.checkValidIdentifier(cd.getColumnName());
+            } catch (ADQLIdentifierException ex) {
+                throw new IllegalArgumentException("invalid column name: " + cd.getColumnName(), ex);
+            }
+        }
+
+        String sql = generateCreateIndex(columns, indexType);
+
         Profiler prof = new Profiler(TableCreator.class);
         DatabaseTransactionManager tm = new DatabaseTransactionManager(dataSource);
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         try {
             tm.startTransaction();
             prof.checkpoint("start-transaction");
-            
+
             log.debug("sql:\n" + sql);
             jdbc.execute(sql);
             prof.checkpoint("create-index");
-            
+
             tm.commitTransaction();
             prof.checkpoint("commit-transaction");
         } catch (Exception ex) {
@@ -322,8 +329,15 @@ public class TableCreator {
             if (ex instanceof IllegalArgumentException) {
                 throw ex;
             }
-            throw new RuntimeException("failed to create index on " + cd.getTableName() + "(" + cd.getColumnName() + ")", ex);
-        } finally { 
+            StringBuilder cols = new StringBuilder(); //readable column list for the error message
+            for (ColumnDesc cd : columns) {
+                if (cols.length() > 0) {
+                    cols.append(",");
+                }
+                cols.append(cd.getColumnName());
+            }
+            throw new RuntimeException("failed to create index on " + tableName + "(" + cols + ")", ex);
+        } finally {
             if (tm.isOpen()) {
                 log.error("BUG: open transaction in finally - trying to rollback");
                 try {
@@ -382,4 +396,15 @@ public class TableCreator {
         
         return sb.toString();
     }
+
+    private String generateCreateIndex(List<ColumnDesc> columns, String indexType) {
+        boolean unique = indexType != null && indexType.equals("unique");
+        if (columns.size() == 1) {
+            return generateCreateIndex(columns.get(0), unique);
+        } else {
+            // TODO: implement multi-column indexes
+            throw new UnsupportedOperationException("multi-column indexes not yet supported");
+        }
+    }
+
 }

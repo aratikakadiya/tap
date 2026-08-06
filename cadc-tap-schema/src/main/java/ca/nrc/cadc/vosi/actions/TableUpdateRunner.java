@@ -125,6 +125,7 @@ public class TableUpdateRunner implements JobRunner {
 
     static {
         PARAM_NAMES.add("index");
+        PARAM_NAMES.add("index_type");
         PARAM_NAMES.add("ingest");
         PARAM_NAMES.add("table");
         PARAM_NAMES.add("unique");
@@ -255,18 +256,33 @@ public class TableUpdateRunner implements JobRunner {
     }
 
     /**
-     * Add a index to a column in the tap_schema and create the index in the database.
+     * Add an index to a column in the tap_schema and create the index in the database.
      * @param params list of request query parameters.
      */
     protected void indexTable(Map<String, List<String>> params) {
         String tableName = getSingleValue("table", params);
-        String columnName = getSingleValue("index", params);
-        boolean unique = "true".equals(getSingleValue("unique", params));
-        log.debug(String.format("indexing table=%s column=%s unique=%s", tableName, columnName, unique));
+        String indexParam = getSingleValue("index", params); // column names comma separated
 
         if (tableName == null) {
             throw new IllegalArgumentException("missing parameter 'table'");
         }
+        if (indexParam == null) {
+            throw new IllegalArgumentException("missing parameter 'index'");
+        }
+
+        List<String> columnNames = new ArrayList<>();
+        for (String col : indexParam.split(",")) {
+            String trimmed = col.trim();
+            if (!trimmed.isEmpty()) {
+                columnNames.add(trimmed);
+            }
+        }
+        if (columnNames.isEmpty()) {
+            throw new IllegalArgumentException("invalid parameter 'index': no column names found");
+        }
+
+        String indexType = validateAndGetIndexType(columnNames, params);
+        log.debug(String.format("indexing table=%s column(s)=%s indexType=%s", tableName, indexParam, indexType));
 
         PluginFactory pf = new PluginFactory();
         TapSchemaDAO ts = pf.getTapSchemaDAO();
@@ -287,13 +303,20 @@ public class TableUpdateRunner implements JobRunner {
             throw new IllegalArgumentException("table not found: " + tableName);
         }
 
-        ColumnDesc cd = td.getColumn(columnName);
-        if (cd == null) {
-            throw new IllegalArgumentException("column not found: " + columnName + " in table " + tableName);
+        List<ColumnDesc> columnsList = new ArrayList<>();
+        for (String columnName : columnNames) {
+            ColumnDesc cd = td.getColumn(columnName);
+            if (cd == null) {
+                throw new IllegalArgumentException("column not found: " + columnName + " in table " + tableName);
+            }
+            columnsList.add(cd);
         }
-        if (cd.indexed) {
-            throw new IllegalArgumentException("column is already indexed: " + columnName + " in table " + tableName);
+
+        if (columnsList.size() == 1 && columnsList.get(0).indexed) {
+            throw new IllegalArgumentException("column is already indexed: "
+                    + columnsList.get(0).getColumnName() + " in table " + tableName);
         }
+        // TODO: Check for existing multicolumn indexes by checking the indexes list?
 
         DatabaseTransactionManager tm = new DatabaseTransactionManager(ds);
         try {
@@ -301,19 +324,22 @@ public class TableUpdateRunner implements JobRunner {
 
             // create index
             TableCreator tc = new TableCreator(ds);
-            tc.createIndex(cd, unique);
+            tc.createIndex(columnsList, indexType);
 
             // createIndex can take considerable time so our view of the column metadata could be out of date
 
-            // write lock row in tap_schema.columns
-            ts.put(cd);
-
-            // get current values in case another thread has updated it
-            cd = ts.getColumn(tableName, cd.getColumnName());
-
-            // update tap_schema
-            cd.indexed = true;
-            ts.put(cd);
+            // For a single-column index: update tap_schema indexed flag
+            if (columnsList.size() == 1) {
+                ColumnDesc cd = columnsList.get(0);
+                // write lock row in tap_schema.columns
+                ts.put(cd);
+                // get current values in case another thread has updated it
+                cd = ts.getColumn(tableName, cd.getColumnName());
+                // update tap_schema
+                cd.indexed = true;
+                ts.put(cd);
+            }
+            // Note: multi-column indexes have no direct representation in tap_schema so not setting for multi column indexes.
 
             tm.commitTransaction();
         } catch (Exception ex) {
@@ -480,6 +506,44 @@ public class TableUpdateRunner implements JobRunner {
             throw new IllegalArgumentException("invalid input: found " + vals.size() + " values for " + pname + " -- expected 1");
         }
         return vals.get(0);
+    }
+
+    private List<String> getMultiValue(String pname, Map<String, List<String>> params) {
+        List<String> vals = params.get(pname);
+        if (vals == null || vals.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return vals;
+    }
+
+    private String validateAndGetIndexType(List<String> columnNames, Map<String, List<String>> params) {
+        List<String> indexTypes = getMultiValue("index_type", params); // TODO: change it to be a single value?
+        if (indexTypes.isEmpty()) {
+            if ("true".equalsIgnoreCase(getSingleValue("unique", params))) {
+                return "unique";
+            } // Backward compatibility: unique=true
+            return null;
+        }
+        if (indexTypes.size() != 1) {
+            throw new IllegalArgumentException("INDEX_TYPE parameter must be specified once");
+        }
+
+        String indexType = indexTypes.get(0).toLowerCase();
+
+        if (indexType.equals("unique")) {
+            if (columnNames.size() != 1) {
+                throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 1 column in the INDEX parameter");
+            }
+            return "unique";
+        } else if (indexType.equals("long-lat") || indexType.equals("x-y")) {
+            if (columnNames.size() != 2) {
+                throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 2 columns in the INDEX parameter");
+            }
+            // return indexType;
+            throw new UnsupportedOperationException("INDEX_TYPE=" + indexType + " is not yet supported");
+        } else {
+            throw new IllegalArgumentException("invalid INDEX_TYPE: " + indexType);
+        }
     }
 
     /**

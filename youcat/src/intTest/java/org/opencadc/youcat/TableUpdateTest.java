@@ -79,6 +79,7 @@ import ca.nrc.cadc.net.HttpPost;
 import ca.nrc.cadc.net.ResourceNotFoundException;
 import ca.nrc.cadc.tap.schema.ColumnDesc;
 import ca.nrc.cadc.tap.schema.TableDesc;
+import ca.nrc.cadc.tap.schema.TapDataType;
 import ca.nrc.cadc.tap.schema.TapPermissions;
 import ca.nrc.cadc.tap.schema.TapSchemaDAO;
 import ca.nrc.cadc.util.Log4jInit;
@@ -148,7 +149,7 @@ public class TableUpdateTest extends AbstractTablesTest {
                     // array column
                     expected = ExecutionPhase.ERROR;
                 }
-                doCreateIndex(schemaOwner, tableName, cd.getColumnName(), false,expected, null);
+                doCreateIndex(schemaOwner, tableName, List.of(cd.getColumnName()), false, null, expected, null);
             }
 
             // cleanup on success
@@ -160,7 +161,7 @@ public class TableUpdateTest extends AbstractTablesTest {
     }
 
     @Test
-    public void testCreateUniqueIndex() {
+    public void testCreateUniqueIndexBC() { // Backward compatible test
         List<String> uniqUnsupported = Arrays.asList(new String[] {
             "interval", "point", "circle", "polygon"
         });
@@ -180,8 +181,78 @@ public class TableUpdateTest extends AbstractTablesTest {
                     expected = ExecutionPhase.ERROR; // unique index not allowed
                 }
                 log.info("testCreateUniqueIndex: " + cd.getColumnName() + " expect: " + expected.getValue());
-                doCreateIndex(schemaOwner, tableName, cd.getColumnName(), true, expected, null);
+                doCreateIndex(schemaOwner, tableName, List.of(cd.getColumnName()), true, null, expected, null);
             }
+
+            // cleanup on success
+            doDelete(schemaOwner, tableName, false);
+        } catch (Exception unexpected) {
+            log.error("unexpected exception", unexpected);
+            Assert.fail("unexpected exception: " + unexpected);
+        }
+    }
+
+    @Test
+    public void testCreateUniqueIndex() {
+        List<String> uniqUnsupported = Arrays.asList("interval", "point", "circle", "polygon");
+        try {
+            clearSchemaPerms();
+            TapPermissions tp = new TapPermissions(null, true, null, null);
+            super.setPerms(schemaOwner, testSchemaName, tp, 204);
+
+            String tableName = testSchemaName + ".testCreateUniqueIndex";
+            doDelete(schemaOwner, tableName, true);
+
+            TableDesc td = doCreateTable(schemaOwner, tableName);
+            for (ColumnDesc cd : td.getColumnDescs()) {
+
+                ExecutionPhase expected = ExecutionPhase.COMPLETED;
+                String x = cd.getDatatype().xtype;
+                if (cd.getColumnName().startsWith("a") // array column
+                        || x != null && uniqUnsupported.contains(x)) {
+                    expected = ExecutionPhase.ERROR; // unique index not allowed
+                }
+                log.info("testCreateUniqueIndex: " + cd.getColumnName() + " expect: " + expected.getValue());
+                doCreateIndex(schemaOwner, tableName, List.of(cd.getColumnName()), null, "unique", expected, null);
+            }
+
+            // cleanup on success
+            doDelete(schemaOwner, tableName, false);
+        } catch (Exception unexpected) {
+            log.error("unexpected exception", unexpected);
+            Assert.fail("unexpected exception: " + unexpected);
+        }
+    }
+
+    @Test
+    public void testCreateMultiColIndex() {
+        try {
+            clearSchemaPerms();
+            TapPermissions tp = new TapPermissions(null, true, null, null);
+            super.setPerms(schemaOwner, testSchemaName, tp, 204);
+
+            String tableName = testSchemaName + ".testCreateMultiColIndex";
+            doDelete(schemaOwner, tableName, true);
+
+            final TableDesc orig = new TableDesc(testSchemaName, tableName);
+            orig.description = "created by intTest";
+            orig.tableType = TableDesc.TableType.TABLE;
+            orig.tableIndex = 1;
+
+            orig.getColumnDescs().add(new ColumnDesc(tableName, "c0", TapDataType.INTEGER));
+            orig.getColumnDescs().add(new ColumnDesc(tableName, "c1", TapDataType.DOUBLE));
+            orig.getColumnDescs().add(new ColumnDesc(tableName, "c2", TapDataType.DOUBLE));
+
+            URL tableURL = new URL(certTablesURL.toExternalForm() + "/" + tableName);
+            TableWriter w = new TableWriter();
+            StringWriter sw = new StringWriter();
+            w.write(orig, sw);
+            log.info("VOSI-table description:\n" + sw);
+
+            createTable(schemaOwner, tp, orig, tableURL);
+
+            // TODO: change ExecutionPhase to be COMPLETED when multi-column index creation is supported.
+            doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "long-lat", ExecutionPhase.ERROR, "unexpected failure: INDEX_TYPE=long-lat is not yet supported");
 
             // cleanup on success
             doDelete(schemaOwner, tableName, false);
