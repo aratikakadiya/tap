@@ -127,6 +127,7 @@ public class AdqlQuery extends AbstractTapQuery
     protected List<TapSelectItem> selectList = null;
     protected List<SelectNavigator> navigatorList = new ArrayList<SelectNavigator>();
     protected TapSchemaTableValidator tstValidator;
+    public static final double ADQL_VERSION = 2.0;
 
     protected transient boolean navigated = false;
     
@@ -216,7 +217,7 @@ public class AdqlQuery extends AbstractTapQuery
             while (cause.getCause() != null) {
                 cause = cause.getCause();
             }
-            throw new IllegalArgumentException("ADQL syntax error: " + cause.getMessage());
+            throw new IllegalArgumentException("ADQL-" + ADQL_VERSION + " syntax error: " + cause.getMessage());
         }
 
         // maxRowCount vs TOP vs LIMIT
