@@ -173,7 +173,7 @@ public class TableCreatorTest extends TestUtil {
                 if (cd.getColumnName().charAt(0) == 'e') {
                     // unique not supported
                     try {
-                        tc.createIndex(List.of(cd), "unique");
+                        tc.createIndex(List.of(cd), List.of("unique"));
                     } catch (IllegalArgumentException expected) {
                         log.info("caught expected: " + expected);
                     }
