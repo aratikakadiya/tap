@@ -91,8 +91,10 @@ import ca.nrc.cadc.vosi.actions.TablesInputHandler;
 import java.io.ByteArrayOutputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.PrivilegedActionException;
 import java.sql.DatabaseMetaData;
 import java.util.Arrays;
 import java.util.List;
@@ -251,8 +253,9 @@ public class TableUpdateTest extends AbstractTablesTest {
 
             createTable(schemaOwner, tp, orig, tableURL);
 
-            // TODO: change ExecutionPhase to be COMPLETED when multi-column index creation is supported.
-            doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "long-lat", ExecutionPhase.ERROR, "unexpected failure: INDEX_TYPE=long-lat is not yet supported");
+            doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "long-lat", ExecutionPhase.COMPLETED, null);
+            doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "x-y", ExecutionPhase.ERROR,
+                    "unexpected failure: failed to update table int_test_schema.testCreateMultiColIndex reason: x-y index type is not yet supported");
 
             // cleanup on success
             doDelete(schemaOwner, tableName, false);

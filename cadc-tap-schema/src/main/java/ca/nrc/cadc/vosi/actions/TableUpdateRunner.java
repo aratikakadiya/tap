@@ -281,8 +281,8 @@ public class TableUpdateRunner implements JobRunner {
             throw new IllegalArgumentException("invalid parameter 'index': no column names found");
         }
 
-        String indexType = validateAndGetIndexType(columnNames, params);
-        log.debug(String.format("indexing table=%s column(s)=%s indexType=%s", tableName, indexParam, indexType));
+        List<String> indexTypes = validateAndGetIndexTypes(columnNames, params);
+        log.debug(String.format("indexing table=%s column(s)=%s indexTypes=%s", tableName, indexParam, indexTypes));
 
         PluginFactory pf = new PluginFactory();
         TapSchemaDAO ts = pf.getTapSchemaDAO();
@@ -324,7 +324,7 @@ public class TableUpdateRunner implements JobRunner {
 
             // create index
             TableCreator tc = new TableCreator(ds);
-            tc.createIndex(columnsList, indexType);
+            tc.createIndex(columnsList, indexTypes);
 
             // createIndex can take considerable time so our view of the column metadata could be out of date
 
@@ -516,34 +516,38 @@ public class TableUpdateRunner implements JobRunner {
         return vals;
     }
 
-    private String validateAndGetIndexType(List<String> columnNames, Map<String, List<String>> params) {
-        List<String> indexTypes = getMultiValue("index_type", params); // TODO: change it to be a single value?
+    private List<String> validateAndGetIndexTypes(List<String> columnNames, Map<String, List<String>> params) {
+        List<String> indexTypes = getMultiValue("index_type", params);
         if (indexTypes.isEmpty()) {
             if ("true".equalsIgnoreCase(getSingleValue("unique", params))) {
-                return "unique";
+                indexTypes.add("unique");
+                return indexTypes;
             } // Backward compatibility: unique=true
-            return null;
-        }
-        if (indexTypes.size() != 1) {
-            throw new IllegalArgumentException("INDEX_TYPE parameter must be specified once");
+            return indexTypes;
         }
 
-        String indexType = indexTypes.get(0).toLowerCase();
-
-        if (indexType.equals("unique")) {
-            if (columnNames.size() != 1) {
-                throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 1 column in the INDEX parameter");
+        for (String indexType : indexTypes) {
+            switch (indexType.toLowerCase()) {
+                case "unique":
+                    if (columnNames.size() != 1) {
+                        throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 1 column in the INDEX parameter");
+                    }
+                    break;
+                case "long-lat":
+                case "x-y":
+                    if (columnNames.size() != 2) {
+                        throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 2 columns in the INDEX parameter");
+                    }
+                    break;
+                default:
+                    throw new IllegalArgumentException("invalid INDEX_TYPE: " + indexType);
             }
-            return "unique";
-        } else if (indexType.equals("long-lat") || indexType.equals("x-y")) {
-            if (columnNames.size() != 2) {
-                throw new IllegalArgumentException("INDEX_TYPE=" + indexType + " requires exactly 2 columns in the INDEX parameter");
-            }
-            // return indexType;
-            throw new UnsupportedOperationException("INDEX_TYPE=" + indexType + " is not yet supported");
-        } else {
-            throw new IllegalArgumentException("invalid INDEX_TYPE: " + indexType);
         }
+
+        if (indexTypes.size() > 1) {
+            throw new IllegalArgumentException("Combination of INDEX_TYPE " + indexTypes + " is not supported.");
+        }
+        return indexTypes;
     }
 
     /**

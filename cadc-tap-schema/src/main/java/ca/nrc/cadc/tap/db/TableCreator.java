@@ -77,6 +77,7 @@ import ca.nrc.cadc.tap.schema.TableDesc;
 import ca.nrc.cadc.tap.schema.TapSchemaUtil;
 import ca.nrc.cadc.tap.schema.Util;
 import java.util.List;
+import java.util.Set;
 import javax.sql.DataSource;
 import org.apache.log4j.Logger;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -284,10 +285,11 @@ public class TableCreator {
         }
     }
 
-    public void createIndex(List<ColumnDesc> columns, String indexType) {
+    public void createIndex(List<ColumnDesc> columns, List<String> indexTypes) {
         if (columns == null || columns.isEmpty()) {
             throw new IllegalArgumentException("columns list must not be empty");
         }
+        // TODO: Validation can be skipped here? Table creation process already checks for valid identifiers.
         String tableName = columns.get(0).getTableName();
         try {
             TapSchemaUtil.checkValidTableName(tableName);
@@ -302,7 +304,7 @@ public class TableCreator {
             }
         }
 
-        String sql = generateCreateIndex(columns, indexType);
+        String sql = generateCreateIndex(columns, indexTypes);
 
         Profiler prof = new Profiler(TableCreator.class);
         DatabaseTransactionManager tm = new DatabaseTransactionManager(dataSource);
@@ -371,39 +373,142 @@ public class TableCreator {
         return sb.toString();
     }
     
-    private String generateCreateIndex(ColumnDesc cd, boolean unique) {
+    private String generateCreateIndex(List<ColumnDesc> columns, List<String> indexTypes) {
+        if (indexTypes != null && indexTypes.size() > 1) {
+            throw new UnsupportedOperationException("combination of index types : " + indexTypes + "is not supported.");
+        }
+
+        ColumnDesc first = columns.get(0);
+        StringBuilder indexName = new StringBuilder("i_");
+        indexName.append(first.getTableName().replace(".", "_"));
+        for (ColumnDesc cd : columns) {
+            indexName.append("_").append(cd.getColumnName());
+        }
+
+        String indexType = indexTypes == null || indexTypes.isEmpty() ? null : indexTypes.get(0);
+        boolean unique = indexType != null && indexType.equals("unique");
+
         StringBuilder sb = new StringBuilder();
         sb.append("CREATE");
         if (unique) {
             sb.append(" UNIQUE");
         }
-        sb.append(" INDEX ");
-        String indexName = "i_" + cd.getTableName().replace(".", "_") + "_" + cd.getColumnName();
-        sb.append(indexName);
-        sb.append(" ON ").append(cd.getTableName());
-        
-        String using = ddType.getIndexUsingQualifier(cd, unique);
-        if (using != null) {
-            sb.append(" USING ").append(using);
+        sb.append(" INDEX ").append(indexName);
+        sb.append(" ON ").append(first.getTableName());
+        if (indexType != null && (indexType.equalsIgnoreCase("long-lat") || indexType.equalsIgnoreCase("x-y"))) {
+            // Hardcoded because columns dont say for sure if it is a coordinate.
+            sb.append(" USING ").append("GIST"); // TODO: Automate this instead of hardcoding
+        } else {
+            String using = ddType.getIndexUsingQualifier(first, unique);
+            if (using != null) {
+                sb.append(" USING ").append(using);
+            }
         }
         sb.append(" (");
-        sb.append(cd.getColumnName());
-        String iop = ddType.getIndexColumnOperator(cd);
-        if (iop != null) {
-            sb.append(" ").append(iop);
+
+        if (indexType != null && indexType.equalsIgnoreCase("long-lat")) {
+            CoordinateValidator.validateLongLatColumns(columns.get(0), columns.get(1));
+            sb.append(buildSpointExpression(columns, first));
+        } else if (indexType != null && indexType.equalsIgnoreCase("x-y")) {
+            //sb.append("point(").append(columns.get(0).getColumnName()).append(", ").append(columns.get(1).getColumnName()).append(")");
+            throw new UnsupportedOperationException("x-y index type is not yet supported");
+        } else { // single column index
+            sb.append(first.getColumnName());
+            String iop = ddType.getIndexColumnOperator(first);
+            if (iop != null) {
+                sb.append(" ").append(iop);
+            }
         }
         sb.append(")");
         
         return sb.toString();
     }
 
-    private String generateCreateIndex(List<ColumnDesc> columns, String indexType) {
-        boolean unique = indexType != null && indexType.equals("unique");
-        if (columns.size() == 1) {
-            return generateCreateIndex(columns.get(0), unique);
-        } else {
-            // TODO: implement multi-column indexes
-            throw new UnsupportedOperationException("multi-column indexes not yet supported");
+    private static String buildSpointExpression(List<ColumnDesc> columns, ColumnDesc column) {
+        boolean isRadian = column.unit != null //default behaviour: assume degrees
+                && (column.unit.equalsIgnoreCase("rad")
+                || column.unit.equalsIgnoreCase("radians"));
+
+        String ra = columns.get(0).getColumnName();
+        String dec = columns.get(1).getColumnName();
+
+        if (!isRadian) {
+            ra = "radians(" + ra + ")";
+            dec = "radians(" + dec + ")";
+        }
+
+        return "((spoint(" + ra + ", " + dec + "))::scircle)";
+    }
+
+    /**
+     * Validates the combination of selected columns and index type.
+     * */
+    private static class CoordinateValidator {
+
+        private static final Set<String> IVOA_GENERIC_UCDS = Set.of("pos", "pos.eq", "pos.galactic", "pos.ecliptic", "pos.supergalactic", "pos.bodyrc");
+
+        // UCDs from IVOA standard - valid for RA.
+        private static final Set<String> IVOA_LONGITUDE_UCDS = Set.of(
+                "pos.eq.ra",
+                "pos.galactic.lon",
+                "pos.ecliptic.lon",
+                "pos.supergalactic.lon",
+                "pos.bodyrc.lon",
+                "pos.earth.lon"
+        );
+
+        // UCDs from IVOA standard - valid for Dec.
+        private static final Set<String> IVOA_LATITUDE_UCDS = Set.of(
+                "pos.eq.dec",
+                "pos.galactic.lat",
+                "pos.ecliptic.lat",
+                "pos.supergalactic.lat",
+                "pos.bodyrc.lat",
+                "pos.earth.lat"
+        );
+
+        /**
+         * Validates spherical Longitude and Latitude columns.
+         */
+        public static void validateLongLatColumns(ColumnDesc lonCol, ColumnDesc latCol) {
+            // 1. Data Type Check
+            if (!lonCol.getDatatype().getDatatype().equalsIgnoreCase("double")
+                    && !lonCol.getDatatype().getDatatype().equalsIgnoreCase("float")) {
+                throw new IllegalArgumentException(lonCol.getColumnName() + " must be of type double or float.");
+            }
+            if (!latCol.getDatatype().getDatatype().equalsIgnoreCase("double")
+                    && !latCol.getDatatype().getDatatype().equalsIgnoreCase("float")) {
+                throw new IllegalArgumentException(latCol.getColumnName() + " must be of type double or float.");
+            }
+
+            // 2. Validate UCDs
+            if (!matchesIVOAUcdSet(lonCol.ucd, IVOA_LONGITUDE_UCDS)) {
+                throw new IllegalArgumentException(
+                        String.format("Column '%s' (UCD: '%s') is not a valid Longitude/RA column.",
+                                lonCol.getColumnName(), lonCol.ucd)
+                );
+            }
+            if (!matchesIVOAUcdSet(latCol.ucd, IVOA_LATITUDE_UCDS)) {
+                throw new IllegalArgumentException(
+                        String.format("Column 1 '%s' (UCD: '%s') is not a valid Latitude/Dec column.",
+                                latCol.getColumnName(), latCol.ucd)
+                );
+            }
+        }
+
+        private static boolean matchesIVOAUcdSet(String rawUcd, Set<String> targetUCDs) {
+            if (rawUcd == null || rawUcd.isBlank()) {
+                return true; // Note: the default behavior allows null UCDs.
+            }
+
+            // Handle semicolon-separated secondary UCD atoms (e.g. "pos.eq.ra;meta.main")
+            String[] atoms = rawUcd.trim().toLowerCase().split(";");
+            for (String atom : atoms) {
+                if (targetUCDs.contains(atom.trim()) || IVOA_GENERIC_UCDS.contains(atom.trim())) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
