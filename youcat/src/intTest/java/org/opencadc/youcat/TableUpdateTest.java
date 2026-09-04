@@ -226,6 +226,13 @@ public class TableUpdateTest extends AbstractTablesTest {
         }
     }
 
+    /**
+     * Step1: create a table with columns: c0, c1 and c2
+     * Step2: Execute a select query on the table, and verify that it used a "Seq Scan" query plan
+     * Step3: Validate success for: Create a long-lat index on the table
+     * Step4: Validate failure for: Create an x-y index on the table
+     * Step5: Execute a select query on the table, and verify that it used a "Bitmap Index Scan" query plan - Used the created long-lat index
+     * */
     @Test
     public void testCreateMultiColIndex() {
         try {
@@ -253,10 +260,37 @@ public class TableUpdateTest extends AbstractTablesTest {
 
             createTable(schemaOwner, tp, orig, tableURL);
 
+            String adql = "SELECT top 10 * FROM int_test_schema.testCreateMultiColIndex WHERE " +
+                    "INTERSECTS(POINT('ICRS GEOCENTER', c1, c2), CIRCLE('ICRS GEOCENTER', 240.45, 28.6203, 0.0167)) = 1";
+            Map<String, Object> params = new TreeMap<>();
+            params.put("LANG", "ADQL");
+            params.put("QUERY", adql);
+            params.put("query-plan", true);
+            String result;
+            try {
+                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params));
+                Assert.assertNotNull(result);
+                log.debug("query-plan:\n" + result);
+                Assert.assertTrue(result.contains("Seq Scan"));
+                Assert.assertFalse(result.contains("Bitmap Index Scan"));
+            } catch (PrivilegedActionException e) {
+                throw new RuntimeException(e);
+            }
+
             doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "long-lat", ExecutionPhase.COMPLETED, null);
             doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "x-y", ExecutionPhase.ERROR,
                     "unexpected failure: failed to update table int_test_schema.testCreateMultiColIndex reason: x-y index type is not yet supported");
 
+            try {
+                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params));
+                Assert.assertNotNull(result);
+                log.debug("query-plan:\n" + result);
+                Assert.assertFalse(result.contains("Seq Scan"));
+                Assert.assertTrue(result.contains("Bitmap Index Scan"));
+                Assert.assertTrue(result.contains("i_int_test_schema_testcreatemulticolindex_c1_c2"));
+            } catch (PrivilegedActionException e) {
+                throw new RuntimeException(e);
+            }
             // cleanup on success
             doDelete(schemaOwner, tableName, false);
         } catch (Exception unexpected) {
