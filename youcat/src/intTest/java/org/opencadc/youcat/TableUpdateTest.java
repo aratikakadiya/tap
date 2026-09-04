@@ -243,6 +243,7 @@ public class TableUpdateTest extends AbstractTablesTest {
             String tableName = testSchemaName + ".testCreateMultiColIndex";
             doDelete(schemaOwner, tableName, true);
 
+            // prepare table
             final TableDesc orig = new TableDesc(testSchemaName, tableName);
             orig.description = "created by intTest";
             orig.tableType = TableDesc.TableType.TABLE;
@@ -258,6 +259,7 @@ public class TableUpdateTest extends AbstractTablesTest {
             w.write(orig, sw);
             log.info("VOSI-table description:\n" + sw);
 
+            // step1: create table
             createTable(schemaOwner, tp, orig, tableURL);
 
             String adql = "SELECT top 10 * FROM int_test_schema.testCreateMultiColIndex WHERE " +
@@ -267,8 +269,10 @@ public class TableUpdateTest extends AbstractTablesTest {
             params.put("QUERY", adql);
             params.put("query-plan", true);
             String result;
+
+            // step2: verify: query plan should be Seq Scan for a select query
             try {
-                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params));
+                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params, null, "text/plain"));
                 Assert.assertNotNull(result);
                 log.debug("query-plan:\n" + result);
                 Assert.assertTrue(result.contains("Seq Scan"));
@@ -277,12 +281,16 @@ public class TableUpdateTest extends AbstractTablesTest {
                 throw new RuntimeException(e);
             }
 
+            // step 3: create long-lat index
             doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "long-lat", ExecutionPhase.COMPLETED, null);
+
+            // step4: crate an x-y index - failure expected
             doCreateIndex(schemaOwner, tableName, List.of("c1", "c2"), null, "x-y", ExecutionPhase.ERROR,
                     "unexpected failure: failed to update table int_test_schema.testCreateMultiColIndex reason: x-y index type is not yet supported");
 
+            // step5: verify: query plan should be Bitmap Index Scan for a select query
             try {
-                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params));
+                result = Subject.doAs(schemaOwner, new AuthQueryTest.SyncQueryAction(certQueryURL, params, null, "text/plain"));
                 Assert.assertNotNull(result);
                 log.debug("query-plan:\n" + result);
                 Assert.assertFalse(result.contains("Seq Scan"));

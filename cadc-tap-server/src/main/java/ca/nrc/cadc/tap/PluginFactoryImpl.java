@@ -297,17 +297,17 @@ public class PluginFactoryImpl extends PluginFactory {
         return ret;
     }
 
-    public QueryProvider getQueryProvider() {
-        String name = QueryProvider.class.getName();
+    public QueryPlanner getQueryPlanner() {
+        String name = QueryPlanner.class.getName();
         String className = config.getProperty(name);
         if (className == null) {
             return null; // not configured = not supported
         }
         try {
             Class<?> clazz = Class.forName(className);
-            return (QueryProvider) clazz.newInstance();
+            return (QueryPlanner) clazz.newInstance();
         } catch (Exception ex) {
-            throw new RuntimeException("config error: failed to create QueryProvider: " + className, ex);
+            throw new RuntimeException("config error: failed to create QueryPlanner: " + className, ex);
         }
     }
 

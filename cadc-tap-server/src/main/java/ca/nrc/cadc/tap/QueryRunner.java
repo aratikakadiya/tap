@@ -342,16 +342,17 @@ public class QueryRunner implements JobRunner {
             Optional<Parameter> queryPlanOptional = paramList.stream().filter(param -> param.getName().equalsIgnoreCase("query-plan")).findFirst();
             boolean queryPlan = queryPlanOptional.isPresent() && queryPlanOptional.get().getValue().equalsIgnoreCase("true");
 
-            QueryProvider planModifier = null;
+            QueryPlanner queryPlanner = null;
             if (queryPlan) {
-                planModifier = pfac.getQueryProvider();
-                if (planModifier == null) {
+                log.debug("creating Query Planner...");
+                queryPlanner = pfac.getQueryPlanner();
+                if (queryPlanner == null) {
                     throw new UnsupportedOperationException("query-plan is not supported by this TAP service backend");
                 }
             }
 
             log.debug("creating TapTableWriter...");
-            TableWriter tableWriter = pfac.getTableWriter();
+            TableWriter tableWriter = pfac.getTableWriter(); // TODO: Instanciate only if queryplan is not requested?
             tableWriter.setSelectList(selectList);
             tableWriter.setQueryInfo(queryInfo);
             this.resultTemplate = tableWriter.generateOutputTable();
@@ -397,19 +398,19 @@ public class QueryRunner implements JobRunner {
                     t1 = t2;
                     diagnostics.add(new Result("diag", URI.create("jndi:connect:" + dt)));
 
-                    // make fetch size (client batch size) small,
-                    // and restrict to forward only so that client memory usage is minimal since
-                    // we are only interested in reading the ResultSet once
                     log.debug("setAutoCommit: " + pfac.getAutoCommit());
                     connection.setAutoCommit(pfac.getAutoCommit());
 
                     log.debug("executing query: " + internalSQL);
                     if (queryPlan) {
-                        String sql = planModifier.prepareQueryPlanStatement(internalSQL);
-                        log.debug("query plan statement: " + sql);
-                        pstmt = connection.prepareStatement(sql);
+                        String planSql = queryPlanner.prepareQueryPlanStatement(internalSQL);
+                        log.debug("query plan statement: " + planSql);
+                        pstmt = connection.prepareStatement(planSql);
                     } else {
                         pstmt = connection.prepareStatement(internalSQL);
+                        // make fetch size (client batch size) small,
+                        // and restrict to forward only so that client memory usage is minimal since
+                        // we are only interested in reading the ResultSet once
                         pstmt.setFetchDirection(ResultSet.FETCH_FORWARD);
                         if (maxRows == null || maxRows > 1000) {
                             log.debug("maxRows = " + maxRows + ": setting fetchSize = 1000");
@@ -427,11 +428,17 @@ public class QueryRunner implements JobRunner {
                 t1 = t2;
                 diagnostics.add(new Result("diag", URI.create("query:execute:" + dt)));
 
-                String filename = "result_" + job.getID() + "." + tableWriter.getExtension();
-                String contentType = tableWriter.getContentType();
+                String filename;
+                String contentType;
+                if (queryPlan) {
+                    contentType = queryPlanner.getContentType();
+                    filename = "queryplan_" + job.getID() + "." + queryPlanner.getExtension();
+                } else {
+                    contentType = tableWriter.getContentType();
+                    filename = "result_" + job.getID() + "." + tableWriter.getExtension();
+                }
 
                 if (syncOutput != null) {
-
                     log.debug("streaming output: " + contentType);
                     syncOutput.setHeader("Content-Type", contentType);
                     String disp = "inline; filename=\"" + filename + "\"";
@@ -474,10 +481,12 @@ public class QueryRunner implements JobRunner {
                     throw new RuntimeException("BUG: both syncOutput and ResultStore are null");
                 }
 
-                log.debug("executing query... " + tableWriter.getRowCount() + " rows [OK]");
-                // note: final chosen here because we could in theory write intermediate rowcounts or state
-                // as suggested by Dave Morris 
-                diagnostics.add(new Result("rowcount", URI.create("final:" + tableWriter.getRowCount())));
+                if (!queryPlan) {
+                    log.debug("executing query... " + tableWriter.getRowCount() + " rows [OK]");
+                    // note: final chosen here because we could in theory write intermediate rowcounts or state
+                    // as suggested by Dave Morris
+                    diagnostics.add(new Result("rowcount", URI.create("final:" + tableWriter.getRowCount())));
+                }
             } catch (SQLException ex) {
                 log.error("SQL Execution error.", ex);
                 throw ex;

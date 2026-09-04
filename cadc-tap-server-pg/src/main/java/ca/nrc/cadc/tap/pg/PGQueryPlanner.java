@@ -65,17 +65,27 @@
  ************************************************************************
  */
 
-package ca.nrc.cadc.tap;
+package ca.nrc.cadc.tap.pg;
+
+import ca.nrc.cadc.tap.QueryPlanner;
 
 /**
- * Provides database-specific queries for the given SQL.
+ * PostgreSQL QueryPlanner.
  */
-public interface QueryProvider {
-    /**
-     * Prepare Query to get query-plan for the given SQL.
-     *
-     * @param sql the backend SQL
-     */
-    String prepareQueryPlanStatement(String sql);
+public class PGQueryPlanner implements QueryPlanner {
 
+    @Override
+    public String prepareQueryPlanStatement(String sql) {
+        return "EXPLAIN (FORMAT YAML) " + sql;
+    }
+
+    @Override
+    public String getContentType() {
+        return "text/plain";
+    }
+
+    @Override
+    public String getExtension() {
+        return "txt";
+    }
 }
