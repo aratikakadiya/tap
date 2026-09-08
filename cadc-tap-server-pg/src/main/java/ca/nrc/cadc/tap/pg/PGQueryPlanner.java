@@ -67,6 +67,7 @@
 
 package ca.nrc.cadc.tap.pg;
 
+import ca.nrc.cadc.net.PermissionDeniedException;
 import ca.nrc.cadc.tap.QueryPlanner;
 
 /**
@@ -76,6 +77,7 @@ public class PGQueryPlanner implements QueryPlanner {
 
     @Override
     public String prepareQueryPlanStatement(String sql) {
+        checkQueryPlanPermission();
         return "EXPLAIN (FORMAT YAML) " + sql;
     }
 
@@ -87,5 +89,10 @@ public class PGQueryPlanner implements QueryPlanner {
     @Override
     public String getExtension() {
         return "txt";
+    }
+
+    // Check if the user has permission to query the query plan.
+    protected void checkQueryPlanPermission() throws PermissionDeniedException {
+        // no-op for now
     }
 }
